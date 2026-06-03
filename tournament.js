@@ -15,6 +15,13 @@ async function initTurnering() {
     }
     await hentMedlemmerForSøk();
     renderTurneringSkjema();
+    
+    // Etter rendering, sett opp auto-lagring og gjenopprett hvis data finnes
+    setupAutoLagring();
+    const lagretData = hentLagretTurneringData();
+    if (lagretData) {
+        gjenopprettTurneringSkjema(lagretData);
+    }
 }
 
 async function hentMedlemmerForSøk() {
@@ -500,5 +507,140 @@ async function utførLagring() {
         visBeskjed('Feil', err.message, 'error');
     } finally {
         if (!suksess) turneringLagringIProsess = false;
+        tømLagretTurneringData();
     }
+}
+// --- AUTOMATISK LAGRING AV SKJEMADATA (sessionStorage) ---
+const STORAGE_KEY = 'turnering_skjema_data';
+
+// Lagrer alle relevante felt til sessionStorage
+function lagreTurneringSkjema() {
+    try {
+        const data = {
+            // Dato
+            dato: document.getElementById('tur-dato')?.value,
+            // Turneringsleder
+            lederId: document.getElementById('tur-leder-id')?.value,
+            lederNavn: document.getElementById('tur-leder-navn')?.value,
+            // Avsetning
+            avsetning: document.getElementById('tur-avsetning')?.value,
+            // Premietype
+            premiemodell: document.querySelector('input[name="premiemodell"]:checked')?.value,
+            // Satser
+            satser: [],
+            // Avstemming
+            vipps: document.getElementById('avstem-vipps')?.value,
+            kort: document.getElementById('avstem-kort')?.value,
+            kontant: document.getElementById('avstem-kontant')?.value,
+            sponsedeAntall: document.getElementById('avstem-sponsede-antall')?.value,
+            sponsedeBelop: document.getElementById('avstem-sponsede-belop')?.value,
+            sponsedeNavn: document.getElementById('avstem-sponsede-navn')?.value
+        };
+        
+        // Hent satser
+        const rader = document.querySelectorAll('.sats-rad');
+        rader.forEach(rad => {
+            const navn = rad.querySelector('.sats-navn-input')?.value;
+            const antall = rad.querySelector('.sats-antall-input')?.value;
+            const avgift = rad.querySelector('.sats-avgift-input')?.value;
+            data.satser.push({ navn, antall, avgift });
+        });
+        
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch(e) { console.warn('Lagring feilet:', e); }
+}
+
+// Henter lagrede data
+function hentLagretTurneringData() {
+    const raw = sessionStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    try {
+        return JSON.parse(raw);
+    } catch(e) { return null; }
+}
+
+// Fyller skjemaet med lagrede data
+function gjenopprettTurneringSkjema(data) {
+    if (!data) return;
+    
+    // Dato
+    if (data.dato) document.getElementById('tur-dato').value = data.dato;
+    // Turneringsleder
+    if (data.lederId) {
+        document.getElementById('tur-leder-id').value = data.lederId;
+        document.getElementById('tur-leder-navn').value = data.lederNavn || '';
+    }
+    // Avsetning
+    if (data.avsetning) document.getElementById('tur-avsetning').value = data.avsetning;
+    // Premietype
+    if (data.premiemodell) {
+        const radio = document.querySelector(`input[name="premiemodell"][value="${data.premiemodell}"]`);
+        if (radio) radio.checked = true;
+    }
+    // Satser – må vente til satser er rendret
+    const satserContainer = document.getElementById('satser-container');
+    if (satserContainer && data.satser && data.satser.length) {
+        // Juster antall satser
+        if (data.satser.length !== satsCounter) {
+            // Endre satsCounter til riktig antall
+            satsCounter = data.satser.length;
+            renderSatser(); // re-render med riktig antall
+        }
+        // Fyll inn verdier etter at satsene er tegnet (setTimeout litt)
+        setTimeout(() => {
+            const rader = document.querySelectorAll('.sats-rad');
+            rader.forEach((rad, idx) => {
+                if (idx < data.satser.length) {
+                    const s = data.satser[idx];
+                    if (s.navn) rad.querySelector('.sats-navn-input').value = s.navn;
+                    if (s.antall) rad.querySelector('.sats-antall-input').value = s.antall;
+                    if (s.avgift) rad.querySelector('.sats-avgift-input').value = s.avgift;
+                }
+            });
+            // Trigger beregning og avstemming
+            beregnTurnering();
+            oppdaterAvstemming();
+        }, 50);
+    }
+    // Avstemmingsfelter
+    if (data.vipps) document.getElementById('avstem-vipps').value = data.vipps;
+    if (data.kort) document.getElementById('avstem-kort').value = data.kort;
+    if (data.kontant) document.getElementById('avstem-kontant').value = data.kontant;
+    if (data.sponsedeAntall) document.getElementById('avstem-sponsede-antall').value = data.sponsedeAntall;
+    if (data.sponsedeBelop) document.getElementById('avstem-sponsede-belop').value = data.sponsedeBelop;
+    if (data.sponsedeNavn) document.getElementById('avstem-sponsede-navn').value = data.sponsedeNavn;
+    
+    // Trigger oppdateringer
+    beregnTurnering();
+    oppdaterAvstemming();
+}
+
+// Sett opp event listeners for automatisk lagring (etter at skjema er rendret)
+function setupAutoLagring() {
+    const felter = [
+        'tur-dato', 'tur-avsetning',
+        'avstem-vipps', 'avstem-kort', 'avstem-kontant',
+        'avstem-sponsede-antall', 'avstem-sponsede-belop', 'avstem-sponsede-navn'
+    ];
+    felter.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('input', () => lagreTurneringSkjema());
+    });
+    // Turneringsleder endring (velges via boble)
+    const lederSok = document.getElementById('tur-leder-sok');
+    if (lederSok) lederSok.addEventListener('input', () => lagreTurneringSkjema());
+    // Radioknapper
+    document.querySelectorAll('input[name="premiemodell"]').forEach(radio => {
+        radio.addEventListener('change', () => lagreTurneringSkjema());
+    });
+    // Satser – delegert på container
+    const satsContainer = document.getElementById('satser-container');
+    if (satsContainer) {
+        satsContainer.addEventListener('input', () => lagreTurneringSkjema());
+    }
+}
+
+// Tøm lagret data etter vellykket lagring
+function tømLagretTurneringData() {
+    sessionStorage.removeItem(STORAGE_KEY);
 }
