@@ -92,7 +92,6 @@ function oppdaterMedlemDatalist() {
 async function lastVaktplan() {
     const monthVal = getMonthString();
     
-    // Først hent alle vaktplan-rader for måneden
     const { data: vaktplanRader, error: vaktplanError } = await sb
         .from('vaktplan')
         .select('*')
@@ -110,14 +109,10 @@ async function lastVaktplan() {
         return;
     }
 
-    // Hent alle vakter for disse vaktplan-radene
     const vaktplanIds = vaktplanRader.map(v => v.id);
     const { data: alleVakter, error: vakterError } = await sb
         .from('vakter')
-        .select(`
-            *,
-            medlem:medlemmer(id, fornavn, etternavn)
-        `)
+        .select(`id, vaktplan_id, medlem_id, vakt_type, varighet, medlem:medlemmer(id, fornavn, etternavn)`) // ← eksplisitt inkluder varighet
         .in('vaktplan_id', vaktplanIds);
 
     if (vakterError) {
@@ -126,7 +121,6 @@ async function lastVaktplan() {
         return;
     }
 
-    // Bygg opp currentVaktplanData med vakter koblet på
     currentVaktplanData = vaktplanRader.map(vp => ({
         ...vp,
         vakter: (alleVakter || []).filter(v => v.vaktplan_id === vp.id)
@@ -152,13 +146,13 @@ function getVakterForDag(vaktplanRow) {
     
     if (vaktplanRow && vaktplanRow.vakter) {
         vaktplanRow.vakter.forEach(v => {
-            if (v.vakt_type === 'hoved') result.hoved = v.medlem;
-            else if (v.vakt_type === 'ekstra') result.ekstra = v.medlem;
-            else if (v.vakt_type === 'ekstra2') result.ekstra2 = v.medlem;
-            else if (v.vakt_type === 'ekstra3') result.ekstra3 = v.medlem;
+            const medlemMedVarighet = { ...v.medlem, varighet: v.varighet };
+            if (v.vakt_type === 'hoved') result.hoved = medlemMedVarighet;
+            else if (v.vakt_type === 'ekstra') result.ekstra = medlemMedVarighet;
+            else if (v.vakt_type === 'ekstra2') result.ekstra2 = medlemMedVarighet;
+            else if (v.vakt_type === 'ekstra3') result.ekstra3 = medlemMedVarighet;
         });
     }
-    
     return result;
 }
 
@@ -198,8 +192,7 @@ function getMonthString() {
     return `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}`;
 }
 
-// 7. Render vaktplan-grid
-// 7. Render vaktplan-grid med farger per ansatt
+// 7. Render vaktplan-grid med farger per ansatt og klokkeslett (hvis angitt)
 function renderVaktplanGrid() {
     const container = document.getElementById('vaktplan-grid');
     if (!container) return;
@@ -270,18 +263,18 @@ function renderVaktplanGrid() {
                 emptyDiv.innerText = '—';
                 dayCard.appendChild(emptyDiv);
             } else {
-                // Hovedvakt med farge
+                // Hovedvakt
                 if (vakter.hoved) {
                     const slot = document.createElement('div');
                     slot.className = 'vaktplan-shift-slot main-shift';
                     const bakgrunnFarge = getFargeForMedlem(vakter.hoved.id);
                     slot.style.backgroundColor = bakgrunnFarge;
-                    slot.style.borderLeft = `3px solid ${getTekstFargeForMedlem(bakgrunnFarge)}`;
-                    slot.innerHTML = `<div class="vaktplan-employee-name">${escapeHtml(vakter.hoved.fornavn)} ${escapeHtml(vakter.hoved.etternavn)}</div>`;
+                    const varighetTekst = vakter.hoved.varighet ? ` ${vakter.hoved.varighet}` : '';
+                    slot.innerHTML = `<div class="vaktplan-employee-name">${escapeHtml(vakter.hoved.fornavn)} ${escapeHtml(vakter.hoved.etternavn)}<span style="float:right; font-size:0.7rem;">${escapeHtml(varighetTekst)}</span></div>`;
                     dayCard.appendChild(slot);
                 }
                 
-                // Ekstravakter med farger
+                // Ekstravakter
                 const ekstraListe = [vakter.ekstra, vakter.ekstra2, vakter.ekstra3];
                 ekstraListe.forEach(medlem => {
                     if (medlem) {
@@ -289,8 +282,8 @@ function renderVaktplanGrid() {
                         slot.className = 'vaktplan-shift-slot extra-shift';
                         const bakgrunnFarge = getFargeForMedlem(medlem.id);
                         slot.style.backgroundColor = bakgrunnFarge;
-                        slot.style.borderLeft = `3px solid ${getTekstFargeForMedlem(bakgrunnFarge)}`;
-                        slot.innerHTML = `<div class="vaktplan-employee-name">${escapeHtml(medlem.fornavn)} ${escapeHtml(medlem.etternavn)}</div>`;
+                        const varighetTekst = medlem.varighet ? ` ${medlem.varighet}` : '';
+                        slot.innerHTML = `<div class="vaktplan-employee-name">${escapeHtml(medlem.fornavn)} ${escapeHtml(medlem.etternavn)}<span style="float:right; font-size:0.7rem;">${escapeHtml(varighetTekst)}</span></div>`;
                         dayCard.appendChild(slot);
                     }
                 });
@@ -309,9 +302,19 @@ function aapneRedigeringsModal(datoTall) {
     const vakter = getVakterForDag(vaktplanRow);
     
     const hovedNavn = vakter.hoved ? `${vakter.hoved.fornavn} ${vakter.hoved.etternavn}` : '';
+    let hovedVarighet = vakter.hoved?.varighet || '';
+    
+    // Hvis varighet er tom, fyll inn forslag basert på ukedag
+    if (!hovedVarighet) {
+        hovedVarighet = getForeslattTidForHovedvakt(datoTall);
+    }
+    
     const e1Navn = vakter.ekstra ? `${vakter.ekstra.fornavn} ${vakter.ekstra.etternavn}` : '';
+    const e1Varighet = vakter.ekstra?.varighet || '';
     const e2Navn = vakter.ekstra2 ? `${vakter.ekstra2.fornavn} ${vakter.ekstra2.etternavn}` : '';
+    const e2Varighet = vakter.ekstra2?.varighet || '';
     const e3Navn = vakter.ekstra3 ? `${vakter.ekstra3.fornavn} ${vakter.ekstra3.etternavn}` : '';
+    const e3Varighet = vakter.ekstra3?.varighet || '';
 
     const eksisterende = document.getElementById('vaktplan-edit-overlay');
     if (eksisterende) eksisterende.remove();
@@ -331,7 +334,7 @@ function aapneRedigeringsModal(datoTall) {
     overlay.innerHTML = `
         <div class="vakt-modal-content" style="
             background: white; border-top-left-radius: 24px; border-top-right-radius: 24px; 
-            padding: 24px; width: 100%; max-width: 500px; box-sizing: border-box;
+            padding: 24px; width: 100%; max-width: 600px; box-sizing: border-box;
             box-shadow: 0 -4px 20px rgba(0,0,0,0.15); max-height: 90vh; overflow-y: auto;
         ">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
@@ -340,21 +343,37 @@ function aapneRedigeringsModal(datoTall) {
             </div>
             
             <div style="display:flex; flex-direction:column; gap:16px;">
+                <!-- HOVEDVAKT -->
                 <div>
                     <label style="display:block; font-size:12px; font-weight:bold; color:var(--marine); margin-bottom:4px;">HOVEDVAKT</label>
-                    <input type="text" id="modal-hoved" class="vaktplan-input" list="medlem-liste" placeholder="Søk medlem..." value="${escapeHtml(hovedNavn)}" style="width:100%; padding:12px; box-sizing:border-box; border:2px solid #ddd; border-radius:12px; font-size:16px;">
+                    <div style="display:flex; gap:8px;">
+                        <input type="text" id="modal-hoved" class="vaktplan-input" list="medlem-liste" placeholder="Søk medlem..." value="${escapeHtml(hovedNavn)}" style="flex:2;">
+                        <input type="text" id="modal-hoved-varighet" class="vaktplan-input" list="tid-intervaller" placeholder="Klokkeslett" value="${escapeHtml(hovedVarighet)}" style="flex:1;">
+                    </div>
                 </div>
+                <!-- EKSTRAVAKT 1 -->
                 <div>
                     <label style="display:block; font-size:12px; font-weight:bold; color:#7f8c8d; margin-bottom:4px;">EKSTRAVAKT 1</label>
-                    <input type="text" id="modal-ekstra1" class="vaktplan-input" list="medlem-liste" placeholder="Søk medlem..." value="${escapeHtml(e1Navn)}" style="width:100%; padding:12px; box-sizing:border-box; border:2px solid #ddd; border-radius:12px; font-size:16px;">
+                    <div style="display:flex; gap:8px;">
+                        <input type="text" id="modal-ekstra1" class="vaktplan-input" list="medlem-liste" placeholder="Søk medlem..." value="${escapeHtml(e1Navn)}" style="flex:2;">
+                        <input type="text" id="modal-ekstra1-varighet" class="vaktplan-input" list="tid-intervaller" placeholder="Klokkeslett" value="${escapeHtml(e1Varighet)}" style="flex:1;">
+                    </div>
                 </div>
+                <!-- EKSTRAVAKT 2 -->
                 <div>
                     <label style="display:block; font-size:12px; font-weight:bold; color:#7f8c8d; margin-bottom:4px;">EKSTRAVAKT 2</label>
-                    <input type="text" id="modal-ekstra2" class="vaktplan-input" list="medlem-liste" placeholder="Søk medlem..." value="${escapeHtml(e2Navn)}" style="width:100%; padding:12px; box-sizing:border-box; border:2px solid #ddd; border-radius:12px; font-size:16px;">
+                    <div style="display:flex; gap:8px;">
+                        <input type="text" id="modal-ekstra2" class="vaktplan-input" list="medlem-liste" placeholder="Søk medlem..." value="${escapeHtml(e2Navn)}" style="flex:2;">
+                        <input type="text" id="modal-ekstra2-varighet" class="vaktplan-input" list="tid-intervaller" placeholder="Klokkeslett" value="${escapeHtml(e2Varighet)}" style="flex:1;">
+                    </div>
                 </div>
+                <!-- EKSTRAVAKT 3 -->
                 <div>
                     <label style="display:block; font-size:12px; font-weight:bold; color:#7f8c8d; margin-bottom:4px;">EKSTRAVAKT 3</label>
-                    <input type="text" id="modal-ekstra3" class="vaktplan-input" list="medlem-liste" placeholder="Søk medlem..." value="${escapeHtml(e3Navn)}" style="width:100%; padding:12px; box-sizing:border-box; border:2px solid #ddd; border-radius:12px; font-size:16px;">
+                    <div style="display:flex; gap:8px;">
+                        <input type="text" id="modal-ekstra3" class="vaktplan-input" list="medlem-liste" placeholder="Søk medlem..." value="${escapeHtml(e3Navn)}" style="flex:2;">
+                        <input type="text" id="modal-ekstra3-varighet" class="vaktplan-input" list="tid-intervaller" placeholder="Klokkeslett" value="${escapeHtml(e3Varighet)}" style="flex:1;">
+                    </div>
                 </div>
             </div>
 
@@ -400,9 +419,13 @@ async function lagreVaktFraModal() {
     if (!aktivRedigeringsDato) return;
     
     const hovedNavn = document.getElementById('modal-hoved').value;
+    const hovedVarighet = document.getElementById('modal-hoved-varighet').value;
     const e1Navn = document.getElementById('modal-ekstra1').value;
+    const e1Varighet = document.getElementById('modal-ekstra1-varighet').value;
     const e2Navn = document.getElementById('modal-ekstra2').value;
+    const e2Varighet = document.getElementById('modal-ekstra2-varighet').value;
     const e3Navn = document.getElementById('modal-ekstra3').value;
+    const e3Varighet = document.getElementById('modal-ekstra3-varighet').value;
     
     let hovedId = null, e1Id = null, e2Id = null, e3Id = null;
     
@@ -420,11 +443,9 @@ async function lagreVaktFraModal() {
     const maaned = getMonthString();
     
     try {
-        // Finn eller opprett vaktplan-rad
         let vaktplanRow = currentVaktplanData.find(v => v.maaned === maaned && v.dato === aktivRedigeringsDato);
         
         if (!vaktplanRow) {
-            // Opprett ny vaktplan-rad
             const { data: nyRad, error: insertError } = await sb
                 .from('vaktplan')
                 .insert({
@@ -434,38 +455,35 @@ async function lagreVaktFraModal() {
                 })
                 .select()
                 .single();
-            
             if (insertError) throw insertError;
             vaktplanRow = nyRad;
             currentVaktplanData.push(vaktplanRow);
         }
         
-        // Slett eksisterende vakter for denne dagen
+        // Slett eksisterende vakter
         const { error: deleteError } = await sb
             .from('vakter')
             .delete()
             .eq('vaktplan_id', vaktplanRow.id);
-        
         if (deleteError) throw deleteError;
         
-        // Sett inn nye vakter
+        // Sett inn nye vakter med varighet
         const vakterToInsert = [];
-        if (hovedId) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: hovedId, vakt_type: 'hoved' });
-        if (e1Id) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: e1Id, vakt_type: 'ekstra' });
-        if (e2Id) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: e2Id, vakt_type: 'ekstra2' });
-        if (e3Id) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: e3Id, vakt_type: 'ekstra3' });
+        if (hovedId) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: hovedId, vakt_type: 'hoved', varighet: hovedVarighet || null });
+        if (e1Id) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: e1Id, vakt_type: 'ekstra', varighet: e1Varighet || null });
+        if (e2Id) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: e2Id, vakt_type: 'ekstra2', varighet: e2Varighet || null });
+        if (e3Id) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: e3Id, vakt_type: 'ekstra3', varighet: e3Varighet || null });
         
         if (vakterToInsert.length > 0) {
             const { error: insertError } = await sb.from('vakter').insert(vakterToInsert);
             if (insertError) throw insertError;
         }
         
-        // Oppdater local cache med de nye vaktene
+        // Oppdater local cache
         const oppdatertCacheVakter = vakterToInsert.map(v => ({
             ...v,
             medlem: getMedlemById(v.medlem_id)
         }));
-        
         vaktplanRow.vakter = oppdatertCacheVakter;
         const index = currentVaktplanData.findIndex(v => v.id === vaktplanRow.id);
         if (index !== -1) currentVaktplanData[index] = vaktplanRow;
@@ -624,28 +642,20 @@ async function visVaktplanRapportModal() {
 
 // Bygger HTML-tabell for rapporten
 function byggVaktplanRapportHTML() {
+    const manedNavn = new Date(currentYear, currentMonth, 1).toLocaleString('no-NO', { month: 'long', year: 'numeric' });
     const ukedager = ['Mandag', 'Tirsdag', 'Onsdag', 'Torsdag', 'Fredag', 'Lørdag', 'Søndag'];
     const dagerIMaaned = new Date(currentYear, currentMonth + 1, 0).getDate();
     
-    let html = `
-        <table class="vaktplan-rapport-tabell">
-            <thead>
-                <tr>
-                    <th>Dato</th>
-                    <th>Ukedag</th>
-                    <th>Hovedvakt</th>
-                    <th>Ekstra 1</th>
-                    <th>Ekstra 2</th>
-                    <th>Ekstra 3</th>
-                </tr>
-            </thead>
-            <tbody>
-    `;
+    // Samle data
+    const dagerData = [];
+    let harHoved = false;
+    let harEkstra1 = false;
+    let harEkstra2 = false;
+    let harEkstra3 = false;
     
     for (let dag = 1; dag <= dagerIMaaned; dag++) {
         const dato = new Date(currentYear, currentMonth, dag);
         const ukedagIndeks = dato.getDay();
-        // Juster slik at mandag = 0
         const justertIndeks = ukedagIndeks === 0 ? 6 : ukedagIndeks - 1;
         const ukedagNavn = ukedager[justertIndeks];
         
@@ -653,28 +663,73 @@ function byggVaktplanRapportHTML() {
         const vakter = getVakterForDag(vaktplanRow);
         
         const hovedNavn = vakter.hoved ? `${vakter.hoved.fornavn} ${vakter.hoved.etternavn}` : '';
-        const e1Navn = vakter.ekstra ? `${vakter.ekstra.fornavn} ${vakter.ekstra.etternavn}` : '';
-        const e2Navn = vakter.ekstra2 ? `${vakter.ekstra2.fornavn} ${vakter.ekstra2.etternavn}` : '';
-        const e3Navn = vakter.ekstra3 ? `${vakter.ekstra3.fornavn} ${vakter.ekstra3.etternavn}` : '';
+        const hovedVarighet = vakter.hoved?.varighet || '';
+        const hovedTekst = hovedNavn ? (hovedVarighet ? `${hovedNavn} ${hovedVarighet}` : hovedNavn) : '';
         
-        html += `
-            <tr>
-                <td>${dag}.</td>
-                <td>${ukedagNavn}</td>
-                <td class="${!hovedNavn ? 'ingen-vakt' : ''}">${hovedNavn || '(ingen)'}</td>
-                <td class="${!e1Navn ? 'ingen-vakt' : ''}">${e1Navn || '(ingen)'}</td>
-                <td class="${!e2Navn ? 'ingen-vakt' : ''}">${e2Navn || '(ingen)'}</td>
-                <td class="${!e3Navn ? 'ingen-vakt' : ''}">${e3Navn || '(ingen)'}</td>
-            </tr>
-        `;
+        const e1Navn = vakter.ekstra ? `${vakter.ekstra.fornavn} ${vakter.ekstra.etternavn}` : '';
+        const e1Varighet = vakter.ekstra?.varighet || '';
+        const e1Tekst = e1Navn ? (e1Varighet ? `${e1Navn} ${e1Varighet}` : e1Navn) : '';
+        
+        const e2Navn = vakter.ekstra2 ? `${vakter.ekstra2.fornavn} ${vakter.ekstra2.etternavn}` : '';
+        const e2Varighet = vakter.ekstra2?.varighet || '';
+        const e2Tekst = e2Navn ? (e2Varighet ? `${e2Navn} ${e2Varighet}` : e2Navn) : '';
+        
+        const e3Navn = vakter.ekstra3 ? `${vakter.ekstra3.fornavn} ${vakter.ekstra3.etternavn}` : '';
+        const e3Varighet = vakter.ekstra3?.varighet || '';
+        const e3Tekst = e3Navn ? (e3Varighet ? `${e3Navn} ${e3Varighet}` : e3Navn) : '';
+        
+        dagerData.push({
+            ukeNr: getWeekNumber(dato),
+            dato: dag,
+            ukedag: ukedagNavn,
+            hoved: hovedTekst,
+            ekstra1: e1Tekst,
+            ekstra2: e2Tekst,
+            ekstra3: e3Tekst
+        });
+        
+        if (hovedTekst) harHoved = true;
+        if (e1Tekst) harEkstra1 = true;
+        if (e2Tekst) harEkstra2 = true;
+        if (e3Tekst) harEkstra3 = true;
     }
     
-    html += `
-            </tbody>
-        </table>
-    `;
+    // Header
+    let headerHtml = '<thead><tr>';
+    headerHtml += '<th style="width: 4ch;">Uke</th>';
+    headerHtml += '<th style="width: 4ch;">Dato</th>';
+    headerHtml += '<th style="width: 8ch;">Ukedag</th>';
+    if (harHoved) headerHtml += '<th style="min-width: 15ch;">Hovedvakt</th>';
+    if (harEkstra1) headerHtml += '<th style="min-width: 15ch;">Ekstra 1</th>';
+    if (harEkstra2) headerHtml += '<th style="min-width: 15ch;">Ekstra 2</th>';
+    if (harEkstra3) headerHtml += '<th style="min-width: 15ch;">Ekstra 3</th>';
+    headerHtml += '</tr></thead>';
     
-    return html;
+    // Body
+    let bodyHtml = '<tbody>';
+    dagerData.forEach(dag => {
+        bodyHtml += '<tr>';
+        bodyHtml += `<td style="text-align: center;">${dag.ukeNr}</td>`;
+        bodyHtml += `<td>${dag.dato}.</td>`;
+        bodyHtml += `<td>${dag.ukedag}</td>`;
+        if (harHoved) bodyHtml += `<td>${escapeHtml(dag.hoved)}</td>`;
+        if (harEkstra1) bodyHtml += `<td>${escapeHtml(dag.ekstra1)}</td>`;
+        if (harEkstra2) bodyHtml += `<td>${escapeHtml(dag.ekstra2)}</td>`;
+        if (harEkstra3) bodyHtml += `<td>${escapeHtml(dag.ekstra3)}</td>`;
+        bodyHtml += '</tr>';
+    });
+    bodyHtml += '</tbody>';
+    
+    // Return komplett HTML (wrapper i div for modal-stil)
+    return `
+        <div class="vaktplan-rapport">
+            <div class="vaktplan-rapport-tittel"> <h2>🎱 ${manedNavn}</h2></div>
+            <table class="vaktplan-rapport-tabell">
+                ${headerHtml}
+                ${bodyHtml}
+            </table>
+        </div>
+    `;
 }
 
 // Lukker vaktplan rapport modal
@@ -684,10 +739,84 @@ function lukkVaktplanRapportModal() {
 
 // Genererer og laster ned PDF
 function lastNedVaktplanRapportPDF() {
-    const rapportHTML = byggVaktplanRapportHTML();
     const iDag = new Date();
     const datoStr = iDag.toLocaleDateString('no-NO');
     const manedNavn = new Date(currentYear, currentMonth, 1).toLocaleString('no-NO', { month: 'long', year: 'numeric' });
+    
+    // Samme logikk som byggVaktplanRapportHTML, men for PDF (uten kolonnebegrensninger)
+    const ukedager = ['Mandag', 'Tirsdag', 'Onsdag', 'Torsdag', 'Fredag', 'Lørdag', 'Søndag'];
+    const dagerIMaaned = new Date(currentYear, currentMonth + 1, 0).getDate();
+    
+    const dagerData = [];
+    let harHoved = false;
+    let harEkstra1 = false;
+    let harEkstra2 = false;
+    let harEkstra3 = false;
+    
+    for (let dag = 1; dag <= dagerIMaaned; dag++) {
+        const dato = new Date(currentYear, currentMonth, dag);
+        const ukedagIndeks = dato.getDay();
+        const justertIndeks = ukedagIndeks === 0 ? 6 : ukedagIndeks - 1;
+        const ukedagNavn = ukedager[justertIndeks];
+        
+        const vaktplanRow = currentVaktplanData.find(v => v.dato === dag);
+        const vakter = getVakterForDag(vaktplanRow);
+        
+        const hovedNavn = vakter.hoved ? `${vakter.hoved.fornavn} ${vakter.hoved.etternavn}` : '';
+        const hovedVarighet = vakter.hoved?.varighet || '';
+        const hovedTekst = hovedNavn ? (hovedVarighet ? `${hovedNavn} ${hovedVarighet}` : hovedNavn) : '';
+        
+        const e1Navn = vakter.ekstra ? `${vakter.ekstra.fornavn} ${vakter.ekstra.etternavn}` : '';
+        const e1Varighet = vakter.ekstra?.varighet || '';
+        const e1Tekst = e1Navn ? (e1Varighet ? `${e1Navn} ${e1Varighet}` : e1Navn) : '';
+        
+        const e2Navn = vakter.ekstra2 ? `${vakter.ekstra2.fornavn} ${vakter.ekstra2.etternavn}` : '';
+        const e2Varighet = vakter.ekstra2?.varighet || '';
+        const e2Tekst = e2Navn ? (e2Varighet ? `${e2Navn} ${e2Varighet}` : e2Navn) : '';
+        
+        const e3Navn = vakter.ekstra3 ? `${vakter.ekstra3.fornavn} ${vakter.ekstra3.etternavn}` : '';
+        const e3Varighet = vakter.ekstra3?.varighet || '';
+        const e3Tekst = e3Navn ? (e3Varighet ? `${e3Navn} ${e3Varighet}` : e3Navn) : '';
+        
+        dagerData.push({
+            ukeNr: getWeekNumber(dato),
+            dato: dag,
+            ukedag: ukedagNavn,
+            hoved: hovedTekst,
+            ekstra1: e1Tekst,
+            ekstra2: e2Tekst,
+            ekstra3: e3Tekst
+        });
+        
+        if (hovedTekst) harHoved = true;
+        if (e1Tekst) harEkstra1 = true;
+        if (e2Tekst) harEkstra2 = true;
+        if (e3Tekst) harEkstra3 = true;
+    }
+    
+    // Bygg tabell (uten faste bredder for PDF)
+    let tableRows = '';
+    dagerData.forEach(dag => {
+        tableRows += '<tr>';
+        tableRows += `<td style="border: 1px solid #ddd; padding: 6px; text-align: center;">${dag.ukeNr}</td>`;
+        tableRows += `<td style="border: 1px solid #ddd; padding: 6px;">${dag.dato}.</td>`;
+        tableRows += `<td style="border: 1px solid #ddd; padding: 6px;">${dag.ukedag}</td>`;
+        if (harHoved) tableRows += `<td style="border: 1px solid #ddd; padding: 6px;">${escapeHtml(dag.hoved)}</td>`;
+        if (harEkstra1) tableRows += `<td style="border: 1px solid #ddd; padding: 6px;">${escapeHtml(dag.ekstra1)}</td>`;
+        if (harEkstra2) tableRows += `<td style="border: 1px solid #ddd; padding: 6px;">${escapeHtml(dag.ekstra2)}</td>`;
+        if (harEkstra3) tableRows += `<td style="border: 1px solid #ddd; padding: 6px;">${escapeHtml(dag.ekstra3)}</td>`;
+        tableRows += '</tr>';
+    });
+    
+    let headerCols = '<tr>';
+    headerCols += '<th style="border: 1px solid #ddd; padding: 8px;">Uke</th>';
+    headerCols += '<th style="border: 1px solid #ddd; padding: 8px;">Dato</th>';
+    headerCols += '<th style="border: 1px solid #ddd; padding: 8px;">Ukedag</th>';
+    if (harHoved) headerCols += '<th style="border: 1px solid #ddd; padding: 8px;">Hovedvakt</th>';
+    if (harEkstra1) headerCols += '<th style="border: 1px solid #ddd; padding: 8px;">Ekstra 1</th>';
+    if (harEkstra2) headerCols += '<th style="border: 1px solid #ddd; padding: 8px;">Ekstra 2</th>';
+    if (harEkstra3) headerCols += '<th style="border: 1px solid #ddd; padding: 8px;">Ekstra 3</th>';
+    headerCols += '</tr>';
     
     const pdfHtml = `
         <html>
@@ -699,9 +828,8 @@ function lastNedVaktplanRapportPDF() {
                 h1 { color: #1a2f3c; border-bottom: 2px solid #c9a84c; padding-bottom: 10px; }
                 .dato { color: #666; margin-bottom: 20px; }
                 table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-                th { background: #1a2f3c; color: white; padding: 10px; text-align: left; }
-                td { border: 1px solid #ddd; padding: 8px; }
-                .ingen-vakt { color: red; font-style: italic; }
+                th { background: #1a2f3c; color: white; padding: 8px; text-align: left; }
+                td { border: 1px solid #ddd; padding: 6px; }
                 .footer { margin-top: 40px; font-size: 12px; color: #666; text-align: center; }
             </style>
         </head>
@@ -710,7 +838,10 @@ function lastNedVaktplanRapportPDF() {
             <h2>Vaktplan - ${manedNavn}</h2>
             <div class="dato">Rapport generert: ${datoStr}</div>
             
-            ${rapportHTML}
+            <table>
+                <thead>${headerCols}</thead>
+                <tbody>${tableRows}</tbody>
+            </table>
             
             <div class="footer">
                 Rapporten er generert automatisk av OBK Administrasjonssystem.
@@ -723,6 +854,18 @@ function lastNedVaktplanRapportPDF() {
     win.document.write(pdfHtml);
     win.document.close();
     win.print();
+}
+// Returnerer forslag til klokkeslett basert på ukedag
+function getForeslattTidForHovedvakt(datoTall) {
+    const dato = new Date(currentYear, currentMonth, datoTall);
+    const ukedag = dato.getDay(); // 0 = søndag, 1 = mandag, ..., 6 = lørdag
+    
+    // Søndag (0) = 14:00-22:00
+    if (ukedag === 0) {
+        return '14:00-22:00';
+    }
+    // Mandag til lørdag (1-6) = 17:00-23:00
+    return '17:00-23:00';
 }
 
 // Globale eksponeringer til window-objektet
