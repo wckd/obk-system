@@ -114,9 +114,11 @@ function setupLogin() {
             errorDiv.style.display = 'block';
         }
     });
-            setupPasswordToggle();
-            setupEnterKey();
+
+    setupPasswordToggle();
+    setupEnterKey();
 }
+
 // Setter opp toggle for vis/skjul passord
 function setupPasswordToggle() {
     const toggleBtn = document.getElementById('toggle-password');

@@ -441,10 +441,32 @@ async function lagreVaktFraModal() {
     
     showLoader(true);
     const maaned = getMonthString();
-    
+
+    // Bygg liste over vaktene som skal lagres (vaktplan_id legges til når raden finnes)
+    const vaktSpec = [];
+    if (hovedId) vaktSpec.push({ medlem_id: hovedId, vakt_type: 'hoved', varighet: hovedVarighet || null });
+    if (e1Id) vaktSpec.push({ medlem_id: e1Id, vakt_type: 'ekstra', varighet: e1Varighet || null });
+    if (e2Id) vaktSpec.push({ medlem_id: e2Id, vakt_type: 'ekstra2', varighet: e2Varighet || null });
+    if (e3Id) vaktSpec.push({ medlem_id: e3Id, vakt_type: 'ekstra3', varighet: e3Varighet || null });
+
     try {
         let vaktplanRow = currentVaktplanData.find(v => v.maaned === maaned && v.dato === aktivRedigeringsDato);
-        
+
+        // Tom dag: slett eventuell eksisterende rad i stedet for å la en tom header-rad bli liggende
+        if (vaktSpec.length === 0) {
+            if (vaktplanRow) {
+                const { error: delVakterError } = await sb.from('vakter').delete().eq('vaktplan_id', vaktplanRow.id);
+                if (delVakterError) throw delVakterError;
+                const { error: delRadError } = await sb.from('vaktplan').delete().eq('id', vaktplanRow.id);
+                if (delRadError) throw delRadError;
+                currentVaktplanData = currentVaktplanData.filter(v => v.id !== vaktplanRow.id);
+            }
+            renderVaktplanGrid();
+            lukkRedigeringsModal();
+            return;
+        }
+
+        // Opprett header-rad først hvis dagen ikke finnes fra før
         if (!vaktplanRow) {
             const { data: nyRad, error: insertError } = await sb
                 .from('vaktplan')
@@ -459,44 +481,35 @@ async function lagreVaktFraModal() {
             vaktplanRow = nyRad;
             currentVaktplanData.push(vaktplanRow);
         }
-        
-        // Slett eksisterende vakter
+
+        // Bytt ut alle vakter for dagen: slett gamle, sett inn nye
         const { error: deleteError } = await sb
             .from('vakter')
             .delete()
             .eq('vaktplan_id', vaktplanRow.id);
         if (deleteError) throw deleteError;
-        
-        // Sett inn nye vakter med varighet
-        const vakterToInsert = [];
-        if (hovedId) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: hovedId, vakt_type: 'hoved', varighet: hovedVarighet || null });
-        if (e1Id) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: e1Id, vakt_type: 'ekstra', varighet: e1Varighet || null });
-        if (e2Id) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: e2Id, vakt_type: 'ekstra2', varighet: e2Varighet || null });
-        if (e3Id) vakterToInsert.push({ vaktplan_id: vaktplanRow.id, medlem_id: e3Id, vakt_type: 'ekstra3', varighet: e3Varighet || null });
-        
-        if (vakterToInsert.length > 0) {
-            const { error: insertError } = await sb.from('vakter').insert(vakterToInsert);
-            if (insertError) throw insertError;
-        }
-        
+
+        const vakterToInsert = vaktSpec.map(v => ({ ...v, vaktplan_id: vaktplanRow.id }));
+        const { error: insertError } = await sb.from('vakter').insert(vakterToInsert);
+        if (insertError) throw insertError;
+
         // Oppdater local cache
-        const oppdatertCacheVakter = vakterToInsert.map(v => ({
+        vaktplanRow.vakter = vakterToInsert.map(v => ({
             ...v,
             medlem: getMedlemById(v.medlem_id)
         }));
-        vaktplanRow.vakter = oppdatertCacheVakter;
         const index = currentVaktplanData.findIndex(v => v.id === vaktplanRow.id);
         if (index !== -1) currentVaktplanData[index] = vaktplanRow;
-        
+
         renderVaktplanGrid();
         lukkRedigeringsModal();
-        
+
     } catch (error) {
         console.error("Feil ved lagring:", error);
         visBeskjed("FEIL", "Kunne ikke lagre vakt: " + error.message, "error");
+    } finally {
+        showLoader(false);
     }
-    
-    showLoader(false);
 }
 
 // 11. Redigeringsmodus (PIN-autentisering)
@@ -604,13 +617,6 @@ function goToToday() {
     }
     
     lastVaktplan();
-}
-
-// Genererer en mørkere tekstfarge for kontrast
-function getTekstFargeForMedlem(bakgrunnFarge) {
-    // Enkel logikk: hvis bakgrunn er lys, bruk mørk tekst, ellers hvit
-    // Forenklet: returner alltid mørk tekst siden fargene er lyse
-    return '#1a2f3c';
 }
 
 // Sette opp event listeners for knapper
@@ -851,6 +857,10 @@ function lastNedVaktplanRapportPDF() {
     `;
     
     const win = window.open();
+    if (!win) {
+        visBeskjed("Popup blokkert", "Tillat popup-vinduer for denne siden for å laste ned rapporten.", "error");
+        return;
+    }
     win.document.write(pdfHtml);
     win.document.close();
     win.print();

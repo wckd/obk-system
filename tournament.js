@@ -403,17 +403,16 @@ function oppdaterAvstemming() {
         kortKasse = kort;
         bankMangel = premier - (vipps + kontant);
     }
+    const vippsPremierTekst = bankMangel > 0
+        ? `<span style="color:red;">${vippsPremier.toLocaleString('no-NO')} kr (mangler ${bankMangel.toLocaleString('no-NO')} kr via bank)</span>`
+        : `<span id="plan-vipps-premier">${vippsPremier.toLocaleString('no-NO')} kr</span>`;
     let planHtml = `
-        <div class="utbetalingsrad"><span>Premier utbetales via Vipps:</span><span id="plan-vipps-premier">${vippsPremier.toLocaleString('no-NO')} kr</span></div>
+        <div class="utbetalingsrad"><span>Premier utbetales via Vipps:</span>${vippsPremierTekst}</div>
         <div class="utbetalingsrad"><span>Rest Vipps til kassen:</span><span id="plan-vipps-kasse">${vippsKasse.toLocaleString('no-NO')} kr</span></div>
         <div class="utbetalingsrad"><span>Kontant til kassen:</span><span id="plan-kontant-kasse">${kontantKasse.toLocaleString('no-NO')} kr</span></div>
         <div class="utbetalingsrad"><span>Kort til kassen:</span><span id="plan-kort-kasse">${kortKasse.toLocaleString('no-NO')} kr</span></div>
     `;
-    if (bankMangel > 0) {
-        planHtml = `<div class="utbetalingsrad"><span>Premier utbetales via Vipps:</span><span style="color:red;">${vippsPremier.toLocaleString('no-NO')} kr (mangler ${bankMangel.toLocaleString('no-NO')} kr via bank)</span></div>` + planHtml.slice(planHtml.indexOf('<div class="utbetalingsrad"><span>Rest'));
-    }
     if (sponsedeAntall > 0 || sponsedeBelop > 0) {
-        const avgiftPer = (totalAvgiftInn / (totalAvgiftInn / (vipps+kort+kontant) || 1));
         planHtml += `
             <div style="margin-top:10px; padding-top:10px; border-top:2px solid #c9a84c;">
                 <div class="utbetalingsrad"><span>🎁 Sponsede (klubben betaler):</span><span>${sponsedeBelop.toLocaleString('no-NO')} kr</span></div>
@@ -506,8 +505,13 @@ async function utførLagring() {
         console.error(err);
         visBeskjed('Feil', err.message, 'error');
     } finally {
-        if (!suksess) turneringLagringIProsess = false;
-        tømLagretTurneringData();
+        // Tøm utkastet kun ved suksess — ellers beholdes det som sikkerhetsnett.
+        // Ved feil slippes lagring-flagget så bruker kan prøve på nytt.
+        if (suksess) {
+            tømLagretTurneringData();
+        } else {
+            turneringLagringIProsess = false;
+        }
     }
 }
 // --- AUTOMATISK LAGRING AV SKJEMADATA (sessionStorage) ---
@@ -586,21 +590,16 @@ function gjenopprettTurneringSkjema(data) {
             satsCounter = data.satser.length;
             renderSatser(); // re-render med riktig antall
         }
-        // Fyll inn verdier etter at satsene er tegnet (setTimeout litt)
-        setTimeout(() => {
-            const rader = document.querySelectorAll('.sats-rad');
-            rader.forEach((rad, idx) => {
-                if (idx < data.satser.length) {
-                    const s = data.satser[idx];
-                    if (s.navn) rad.querySelector('.sats-navn-input').value = s.navn;
-                    if (s.antall) rad.querySelector('.sats-antall-input').value = s.antall;
-                    if (s.avgift) rad.querySelector('.sats-avgift-input').value = s.avgift;
-                }
-            });
-            // Trigger beregning og avstemming
-            beregnTurnering();
-            oppdaterAvstemming();
-        }, 50);
+        // renderSatser() er synkron, så radene finnes allerede — fyll inn direkte
+        const rader = document.querySelectorAll('.sats-rad');
+        rader.forEach((rad, idx) => {
+            if (idx < data.satser.length) {
+                const s = data.satser[idx];
+                if (s.navn) rad.querySelector('.sats-navn-input').value = s.navn;
+                if (s.antall) rad.querySelector('.sats-antall-input').value = s.antall;
+                if (s.avgift) rad.querySelector('.sats-avgift-input').value = s.avgift;
+            }
+        });
     }
     // Avstemmingsfelter
     if (data.vipps) document.getElementById('avstem-vipps').value = data.vipps;
