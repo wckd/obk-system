@@ -14,10 +14,12 @@ async function initAdminPanel() {
 async function HentVarslerPeriode() {
     const container = document.getElementById('admin-varsel-periode');
     
-    // Hent alle aktive periodekort
+    // Hent alle aktive periodekort. !inner-join + er_aktiv-filter ekskluderer
+    // soft-slettede medlemmer (og garanterer at kort.medlemmer aldri er null).
     const { data, error } = await sb
         .from('periodekort')
-        .select('slutt_dato, medlem_id, medlemmer(fornavn, etternavn)')
+        .select('slutt_dato, medlem_id, medlemmer!inner(fornavn, etternavn)')
+        .eq('medlemmer.er_aktiv', true)
         .order('slutt_dato', { ascending: false });
     
     if (error) {
@@ -138,8 +140,7 @@ async function markerKontaktet(nr) {
 
 function fornySkap(nr) {
     showModule('skap'); // Navigerer til skap-modulen
-    selectLocker(nr);   // Velger skapet (krever at selectLocker er tilgjengelig globalt)
-    showRenewalForm();  // Åpner fornyelse automatisk
+    selectLocker(nr);   // Velger skapet — viser fornyelsespanelet for opptatte skap
 }
 // maintenance.js - Legg til denne nederst
 
@@ -251,12 +252,6 @@ async function adminOpprettMedlem() {
     
     showLoader(false);
 }
- function adminAvbryt() {
-    document.getElementById('admin-fornavn').value = '';
-    document.getElementById('admin-etternavn').value = '';
-    document.getElementById('admin-mobil').value = '';
-    document.getElementById('admin-epost').value = '';
-}
 // Søk etter medlemmer (kontrollpanelet)
 let adminSearchTimeout = null;
 let valgtAdminMedlem = null;
@@ -264,13 +259,19 @@ let valgtAdminMedlem = null;
 function initAdminSearch() {
     const searchInput = document.getElementById('admin-member-search');
     if (!searchInput) return;
-    
+
+    // initAdminPanel kjører hver gang admin-fanen åpnes — guard så vi ikke
+    // stabler nye input- og document-listeners for hvert besøk.
+    if (searchInput.dataset.searchInit) return;
+    searchInput.dataset.searchInit = '1';
+
     searchInput.addEventListener('input', function(e) {
         const query = e.target.value.trim();
         const bubble = document.getElementById('admin-search-bubble');
-        
+
         if (query.length < 3) {
-            bubble.style.display = 'none';
+            // Boblen opprettes først ved første søketreff — kan mangle her.
+            if (bubble) bubble.style.display = 'none';
             return;
         }
         
@@ -409,7 +410,7 @@ async function adminRedigerMedlem() {
                 etternavn, 
                 tlf_mobil: mobil,
                 epost: epost || null,
-                oppdatert_at: new Date() 
+                oppdatert_at: new Date().toISOString()
             })
             .eq('id', valgtAdminMedlem.id);
         
@@ -449,27 +450,27 @@ async function visUtloptRapportModal() {
 
 // Henter data fra databasen
 async function hentUtloptRapport() {
-    const iDag = new Date();
-    const iDagStr = iDag.toISOString().split('T')[0];
-    
-    // Beregn dato for 180 dager siden
-    const for180DagerSiden = new Date();
-    for180DagerSiden.setDate(iDag.getDate() - 180);
-    const for180DagerSidenStr = for180DagerSiden.toISOString().split('T')[0];
-    
-    // Hent alle periodekort med medlemdata
+    // Lokale dato-strenger — toISOString() gir UTC-dato som er én dag bak
+    // lokal tid mellom 23:00/00:00 og midnatt norsk tid.
+    const iDagStr = getTodayLocal();
+    const for180DagerSidenStr = addDaysLocal(iDagStr, -180);
+
+    // Hent alle periodekort med medlemdata. !inner-join + er_aktiv-filter
+    // ekskluderer soft-slettede medlemmer og garanterer at kort.medlemmer
+    // aldri er null (orphan-rader ville ellers krasjet sorteringen under).
     const { data, error } = await sb
         .from('periodekort')
         .select(`
             start_dato,
             slutt_dato,
             medlem_id,
-            medlemmer (
+            medlemmer!inner (
                 fornavn,
                 etternavn,
                 er_aktiv
             )
         `)
+        .eq('medlemmer.er_aktiv', true)
         .gte('slutt_dato', for180DagerSidenStr)
         .lte('slutt_dato', iDagStr)
         .order('slutt_dato', { ascending: false });
@@ -558,10 +559,8 @@ function lastNedUtloptRapportPDF() {
         return;
     }
     
-    const iDag = new Date();
-    const datoStr = iDag.toLocaleDateString('no-NO');
-    const filnavn = `obk_utlopt_rapport_${iDag.toISOString().split('T')[0]}.pdf`;
-    
+    const datoStr = new Date().toLocaleDateString('no-NO');
+
     // Bygg HTML for PDF
     let tableRows = '';
     sisteRapportData.forEach(kort => {
@@ -617,21 +616,19 @@ function lastNedUtloptRapportPDF() {
         </html>
     `;
     
-    // Bruk jsPDF og html2canvas (må lastes inn)
+    // window.open() returnerer null når nettleseren blokkerer popup-vinduer.
     const win = window.open();
+    if (!win) {
+        visBeskjed("Popup blokkert", "Tillat popup-vinduer for denne siden for å laste ned rapporten.", "error");
+        return;
+    }
     win.document.write(pdfHtml);
     win.document.close();
     win.print();
 }
 
-// Hjelpefunksjon for datoformat
-function formatDateForDisplay(isoDate) {
-    if (!isoDate) return '';
-    const parts = isoDate.split('-');
-    return `${parts[2]}.${parts[1]}.${parts[0]}`;
-}
+// formatDateForDisplay bor i app.js — ikke dupliser den her.
 
-// Oppdater adminAvbryt
 function adminAvbryt() {
     valgtAdminMedlem = null;
     document.getElementById('admin-fornavn').value = '';

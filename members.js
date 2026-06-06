@@ -507,11 +507,14 @@ async function fortsettRegistrering(fornavn, etternavn, mobil, epost, startDato,
 
 async function checkMemberExists(fornavn, etternavn) {
     try {
+        // er_aktiv-filter: et soft-slettet medlem skal ikke blokkere
+        // re-registrering med samme navn.
         const { data, error } = await sb
             .from('medlemmer')
             .select('id')
             .ilike('fornavn', fornavn)
             .ilike('etternavn', etternavn)
+            .eq('er_aktiv', true)
             .limit(1);
         
         if (error) throw error;
