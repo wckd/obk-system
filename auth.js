@@ -1,20 +1,27 @@
 // auth.js - Håndterer pålogging med Supabase Auth
 
+// Laster inn data-modulene etter bekreftet pålogging. Dette er ENESTE
+// stedet modulene skal lastes ved oppstart — datalasting før innlogging
+// ville lagt alt i DOM-en bak en ren CSS-skjuling (display:none).
+// Bordleie er default-modul, så polling startes her også (idempotent).
+function lastModulerEtterPålogging() {
+    if (typeof startBordPolling === 'function') startBordPolling();
+    if (typeof loadTables === 'function') loadTables();
+    if (typeof updateMemberModule === 'function') updateMemberModule();
+    if (typeof loadLockers === 'function') loadLockers();
+}
+
 // Sjekker om bruker er pålogget ved sidelasting
 async function sjekkPålogget() {
     try {
         const { data: { session } } = await window.sb.auth.getSession();
-        
+
         if (session) {
             // Bruker er pålogget
             document.body.classList.add('logged-in');
             document.body.classList.remove('logged-out');
             startPåloggetSession();
-            
-            // Last inn moduler (hvis de finnes)
-            if (typeof loadTables === 'function') setTimeout(loadTables, 100);
-            if (typeof updateMemberModule === 'function') setTimeout(updateMemberModule, 100);
-            if (typeof loadLockers === 'function') setTimeout(loadLockers, 100);
+            lastModulerEtterPålogging();
         } else {
             // Bruker er ikke pålogget
             document.body.classList.add('logged-out');
@@ -49,9 +56,17 @@ async function loggUt() {
 
     try {
         // Logg ut fra Supabase
-        await window.sb.auth.signOut();
+        const { error } = await window.sb.auth.signOut();
+        if (error) throw error;
     } catch (err) {
         console.error('Feil ved utlogging:', err);
+        // signOut feilet (f.eks. nettverksfeil) — da ligger sesjons-tokenet
+        // fortsatt i localStorage, og sjekkPålogget() ville logget brukeren
+        // stille inn igjen etter reload. Fjern Supabase-nøklene eksplisitt
+        // så utlogging aldri feiler åpent.
+        Object.keys(localStorage)
+            .filter(k => k.startsWith('sb-') && k.includes('-auth-token'))
+            .forEach(k => localStorage.removeItem(k));
     }
 
     // Last om siden for å vise påloggingsskjerm.
@@ -102,12 +117,9 @@ function setupLogin() {
             // Nullstill passordfelt
             document.getElementById('login-password').value = '';
             errorDiv.style.display = 'none';
-            
-            // Last inn moduler
-            if (typeof loadTables === 'function') loadTables();
-            if (typeof updateMemberModule === 'function') updateMemberModule();
-            if (typeof loadLockers === 'function') loadLockers();
-            
+
+            lastModulerEtterPålogging();
+
         } catch (err) {
             console.error('Login error:', err);
             errorDiv.innerText = err.message || 'Feil e-post eller passord';
