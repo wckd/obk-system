@@ -81,14 +81,9 @@ function formatDateForDisplay(isoDate) {
     return `${parts[2]}.${parts[1]}.${parts[0]}`;
 }
 
-window.addEventListener('load', () => {
-    // Bordleie er default-modul (synlig på sidelast). Start polling FØR loadTables
-    // så timeren er garantert satt opp uansett hva som skjer i load-kallet.
-    startBordPolling();
-    loadTables();
-    updateMemberModule();
-    loadLockers();
-});
+// NB: Ingen datalasting ved sidelast her. Modulene lastes først etter
+// bekreftet pålogging — se lastModulerEtterPålogging() i auth.js. Å laste
+// data før innlogging ville lagt alt i DOM-en bak en ren CSS-skjuling.
 // --- MOBIL-MENY LOGIKK ---
 
 /**

@@ -14,7 +14,10 @@
             integrity="sha512-MOQkOfO7iw7/ZiuMJzThLhiiidpNBXcocOWUi514xVtxZKhKQAhS/krSuGA8OCZnPuQixxZhd8+wXAZVNJsqeA=="
             crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
-<body>
+<!-- logged-out som default: trygg tilstand fra første paint. sjekkPålogget()
+     bytter til logged-in først når Supabase bekrefter en gyldig sesjon —
+     ellers er nav synlig og klikkbar i vinduet før getSession() resolver. -->
+<body class="logged-out">
 <datalist id="tid-intervaller">
     <option value="17:00-23:00">
     <option value="14:00-22:00">
